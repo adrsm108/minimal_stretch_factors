@@ -1,24 +1,21 @@
 import itertools
-from typing import Iterable, Callable, Iterator, Generator, Any, cast
+from operator import itemgetter
+from typing import (
+    Iterable,
+    Any,
+    Callable,
+    Sequence,
+)
+from types import GeneratorType
+from collections import deque
 
 from sage.graphs.digraph import DiGraph
-from sage.graphs.generic_graph import GenericGraph
+
+type NestedTuple[T] = None | tuple[T, NestedTuple[T]]
 
 
-def dedupe_adjacent[T](iterable: Iterable[T]):
-    iterator = iter(iterable)
-    try:
-        prev = next(iterator)
-        yield prev
-    except StopIteration:
-        return
-
-    for item in iterator:
-        if item == prev:
-            continue
-        else:
-            prev = item
-            yield prev
+def dedupe_adjacent[T](iterable: Iterable[T]) -> Iterable[T]:
+    return map(itemgetter(0), itertools.groupby(iterable))
 
 
 def grouped_by[T, K](iterable: Iterable[T], f: Callable[[T], K]) -> dict[K, list[T]]:
@@ -60,57 +57,39 @@ def with_attributes(obj, **kwargs):
     return obj
 
 
+def countlen[T](iterable: Iterable[T]):
+    return sum((1 for _ in iterable), start=0)
+
+
 def rle[T](iterable: Iterable[T]):
     """
     Generate the run length encoding of an iteratble
 
     Yields pairs of the form (element, count)
     """
-    iterator = iter(iterable)
-    try:
-        x = next(iterator)
-        count = 1
-    except StopIteration:
-        return
-    for y in iterator:
-        if y != x:
-            yield x, count
-            x = y
-            count = 1
-        else:
-            count += 1
-    yield x, count
+    return ((x, countlen(xs)) for x, xs in itertools.groupby(iterable))
 
 
-def from_rle[T](iterable: Iterable[tuple[T, int]]) -> Generator[T, Any, None]:
+def from_rle[T](iterable: Iterable[tuple[T, int]]):
     """Yield elements of a run length encoded sequence"""
-    return itertools.chain.from_iterable(
-        itertools.repeat(x, n) for x, n in iterable if n > 0
-    )
-
-
-# def canonical_graph(g: GenericGraph)
+    return (x for x, n in iterable for _ in range(n))
 
 
 def sgn(x):
     return -1 if x < 0 else 0 if x == 0 else 1
 
 
-# def canonical_spanning_tree(g: DiGraph):
-#     visited = set()
-#     # g.dep
-
 _MISSING = object()
 
-def first[T](iterable: Iterable[T], default=_MISSING) -> T:
+
+def first[T, DT](iterable: Iterable[T], default: DT = _MISSING):
     try:
         return next(iter(iterable))
     except StopIteration:
         if default is _MISSING:
-            raise(ValueError('iterable is empty'))
+            raise (ValueError("Received empty iterable with no default specified"))
         else:
             return default
-
 
 
 def run_positions(A: Iterable):
@@ -130,30 +109,18 @@ def run_positions(A: Iterable):
     yield start, i + 1
 
 
-def inverse_path(path):
-    return tuple(-s for s in reversed(path))
+def inverse_path(path: Sequence[int]):
+    return tuple(s for s in reversed(path))
 
 
-def turn[T](u: T | None, v: T | None) -> tuple[T, T] | tuple[None, T | None]:
+def to_turn[T](u: T | None, v: T | None) -> tuple[T, T] | tuple[None, T | None]:
     return (
         (u, v) if u is None else (v, u) if v is None else (u, v) if u <= v else (v, u)
     )
 
 
 def first_truthy[T, DT](iterable: Iterable[T], default: DT = False, key=None):
-    for item in iterable:
-        if (not key and item) or (key and key(item)):
-            return item
-    else:
-        return default
-
-
-def first_falsy[T, DT](iterable: Iterable[T], default: DT = True, key=None):
-    for item in iterable:
-        if (not key and not item) or (key and not key(item)):
-            return item
-    else:
-        return default
+    return next(filter(key, iterable), default)
 
 
 def stack_graph(stacks, images, stack_index=None, canonicalize=False) -> DiGraph:
@@ -192,6 +159,7 @@ def stack_graph(stacks, images, stack_index=None, canonicalize=False) -> DiGraph
 
     return graph
 
+
 def transpose_list[T](iterables: Iterable[Iterable[T]]):
     iterators = [iter(it) for it in iterables]
     while iterators:
@@ -200,12 +168,42 @@ def transpose_list[T](iterables: Iterable[Iterable[T]]):
         except StopIteration:
             return
 
-def unnest(coll, base=False):
+
+def unnest[T](coll: NestedTuple[T]):
     while True:
         match coll:
             case (x, coll):
                 yield x
-            case x:
-                if base:
-                    yield x
+            case _:
                 return
+
+
+def consume(iterator, n=None):
+    """Advance the iterator n-steps ahead. If n is None, consume entirely."""
+    # Use functions that consume iterators at C speed.
+    if n is None:
+        deque(iterator, maxlen=0)
+    else:
+        next(itertools.islice(iterator, n, n), None)
+
+
+def nneg(x):
+    return 0 if x < 0 else x
+
+
+def shortlex(x):
+    return len(x), x
+
+
+def lsbi(n):
+    """Return index of lowest set bit, or -1 if `n` is 0"""
+    return (n & -n).bit_length() - 1
+
+
+def deep_tuple(coll: Iterable) -> tuple[Any, ...]:
+    return (
+        *(
+            deep_tuple(x) if isinstance(x, list | tuple | GeneratorType) else x
+            for x in coll
+        ),
+    )

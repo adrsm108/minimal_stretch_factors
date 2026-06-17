@@ -1,12 +1,11 @@
 import itertools
 from collections import ChainMap
-from typing import Container, cast, Iterable
+from typing import Container, Iterable
 from copy import copy
 from itertools import starmap
 
-from sage.graphs.digraph import DiGraph
 from sage.sets.disjoint_set import DisjointSet_of_hashables as DisjointSet
-from utils import sgn, first, inverse_path, turn, first_truthy, stack_graph
+from utils import sgn, inverse_path, to_turn, first_truthy, stack_graph
 
 type Turn = tuple[int, int]
 type Stacks = tuple[tuple[int, ...], ...]
@@ -14,6 +13,8 @@ type Stacks = tuple[tuple[int, ...], ...]
 
 class PartialGraphMap(ChainMap[int, int]):
     """ """
+
+    __slots__ = ("edge_maps", "base_edges")
 
     edge_maps: dict[int, tuple[int, ...]]
     base_edges: tuple[int, ...]
@@ -40,16 +41,24 @@ class PartialGraphMap(ChainMap[int, int]):
                 u = v
         return cls(base_dict, base_edges=tuple(base_edges))
 
+    # @classmethod
+    # def from_str(cls, string: str):
+    #     string = string.removeprefix(f"{cls.__name__}(").removesuffix(")")
+    #     images, stacks = string.split(";")
+
     @property
     def final_edges(self):
         return tuple(self._final_edge(e) for e in self.base_edges)
 
     @property
     def stacks(self):
-        return tuple(tuple(self._stack_tail(e)) for e in self.base_edges)
+        return tuple((*self._stack_tail(e),) for e in self.base_edges)
 
     def is_complete(self):
         return all(e in self.edge_maps for e in self.final_edges)
+
+    def missing_images(self):
+        return tuple(e for e in self.final_edges if e not in self.edge_maps)
 
     def _stack_tail(self, e: int):
         while e is not None:
@@ -65,24 +74,28 @@ class PartialGraphMap(ChainMap[int, int]):
             e = self[e]
 
     def __str__(self):
-        return f"{self.__class__.__name__}({', '.join(repr(m) for m in self.maps)}, base_edges={self.base_edges!r}, edge_maps={self.edge_maps!r})"
+        return f"{self.__class__.__name__}({
+            ', '.join(
+                f'{e}->{im[0] if len(im) == 1 else im}'
+                for e, im in self.edge_maps.items()
+            )
+        }; {
+            ', '.join(
+                '->'.join(str(e) for e in stack)
+                for stack in self.stacks
+                if len(stack) > 1
+            )
+        })"
 
     def __repr__(self):
         return f"{self.__class__.__name__}({
-            ', '.join(
-                itertools.chain(
-                    (
-                        f'{e}->{im[0] if len(im) == 1 else im}'
-                        for e, im in self.edge_maps.items()
-                    ),
-                    (
-                        '->'.join(str(e) for e in stack)
-                        for stack in self.stacks
-                        if len(stack) > 1
-                    ),
-                )
-            )
-        })"
+            ', '.join(repr(m) for m in self.maps)
+        }, base_edges={self.base_edges!r}, edge_maps={self.edge_maps!r})"
+
+    def _repr_pretty_(self, p=None, cycle=None):
+        if p is None:
+            return str(self)
+        return p.text(str(self))
 
     def __missing__(self, key):
         return None
@@ -90,7 +103,7 @@ class PartialGraphMap(ChainMap[int, int]):
     def __call__(self, x):
         match x:
             case [*_]:
-                return tuple(starmap(self.edge_image, x))
+                return (*starmap(self.edge_image, x),)
             case _:
                 return self[x]
 
@@ -116,7 +129,7 @@ class PartialGraphMap(ChainMap[int, int]):
             return (self[e],)
 
     def turn_image(self, u, v) -> Turn | tuple[None, None | int]:
-        return turn(self[u], self[v])
+        return to_turn(self[u], self[v])
 
     def iterate_image(self, v):
         yield v
@@ -125,9 +138,9 @@ class PartialGraphMap(ChainMap[int, int]):
 
     def preimages(self, v):
         if isinstance(v, Container):
-            return set(u for map in self.maps for u, fu in map.items() if fu in v)
+            return {u for map in self.maps for u, fu in map.items() if fu in v}
         else:
-            return set(u for map in self.maps for u, fu in map.items() if fu == v)
+            return {u for map in self.maps for u, fu in map.items() if fu == v}
 
     # @staticmethod
 
@@ -145,7 +158,7 @@ class PartialGraphMap(ChainMap[int, int]):
     def any_illegal(self, turns):
         seen = set[Turn]()
         for turn in turns:
-            u, v = turn(*turn)
+            u, v = to_turn(*turn)
             while not (u is None or (u, v) in seen):
                 if u == v:
                     return True
@@ -228,7 +241,7 @@ class PartialGraphMap(ChainMap[int, int]):
         return result
 
     def canonical_representative(self, relabel_edges=True, certificate=False):
-        stacks = [tuple(self._stack_tail(e)) for e in self.base_edges]
+        stacks = [(*self._stack_tail(e),) for e in self.base_edges]
         images = []
         stack_index: dict[int, int] = {}
         n_stacks = len(stacks)
@@ -279,11 +292,13 @@ class PartialGraphMap(ChainMap[int, int]):
         result = PartialGraphMap.from_stacks(
             tuple(tuple(abs(relab[e]) for e in stacks[i]) for i in range(n_stacks))
         )
-        
+
         for i in range(n_stacks):
             e = stacks[i][-1]
             result._add_edge_mapping(
                 relab[e], tuple(relab[img_e] for img_e in self.edge_image(e))
             )
 
-        return result, {e: new_e for e, new_e in relab.items() if e > 0} if certificate else result
+        return result, {
+            e: new_e for e, new_e in relab.items() if e > 0
+        } if certificate else result

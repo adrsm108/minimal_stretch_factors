@@ -1,0 +1,4 @@
+#target-version = "py312"
+#ignore = ["E306"]
+[format]
+quote-style = "double"

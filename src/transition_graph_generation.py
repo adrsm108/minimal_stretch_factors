@@ -13,7 +13,7 @@ from sage.matrix.constructor import matrix
 from sage.rings.qqbar import AlgebraicNumber
 from scipy.sparse.linalg import eigs
 
-from utils import dedupe_adjacent, grouped_by, unnest
+from utils import dedupe_adjacent, grouped_by
 
 type CycleWithMultiplicity = tuple[list[int], int]
 type BridgePair = tuple[int | tuple[int, int], int | tuple[int, int]]
@@ -70,13 +70,15 @@ def simple_closed_curve_count(g: DiGraph):
 
 
 def curve_complex(data: DiGraph | Iterable[CycleWithMultiplicity], canonical=True):
-    cycles = list(
-        simple_cycles_with_multiplicity(data) if isinstance(data, DiGraph) else data
+    cycles = (
+        [*simple_cycles_with_multiplicity(data)]
+        if isinstance(data, DiGraph)
+        else [*data]
     )
     cc = Graph(sum(m for _, m in cycles), multiedges=False, loops=False)
     i_offset = 0
     for i, (ci, mi) in enumerate(cycles):
-        ci = set(ci)
+        ci = {*ci}
         j_offset = 0
         for j, (cj, mj) in enumerate(islice(cycles, i)):
             if ci.isdisjoint(cj):
@@ -182,7 +184,7 @@ def bridge(g: DiGraph, a, b):
 
 def bridge_pairs(g: DiGraph):
     verts = g.vertices()
-    edges = list(dedupe_adjacent(g.edge_iterator(labels=False)))
+    edges = [*dedupe_adjacent(g.edge_iterator(labels=False))]
     for u in verts:
         for v in verts:
             yield u, v
@@ -222,7 +224,7 @@ def topological_digraphs_with_curve_complexes(
     while gs := descendants:
         descendants = set[DiGraph]()
         for g in gs:
-            cycles = list(simple_cycles_with_multiplicity(g))
+            cycles = [*simple_cycles_with_multiplicity(g)]
             curve_count = sum(m for _, m in cycles)
             if (
                 curve_count in targets
@@ -251,7 +253,7 @@ def subdivisions(g: DiGraph, n_verts):
             eaut,
             n_verts,
             None,
-            sgs=tuple(tuple(s) for s in eaut.strong_generating_system()),
+            sgs=tuple((*s,) for s in eaut.strong_generating_system()),
         )
 
 
@@ -365,7 +367,5 @@ def candidate_digraphs(spec, max_lambda=None, tol=0):
                             loops=True,
                         )
                         dg.relabel(lambda i: i + 1)
-                        result.append(
-                            dg
-                        )
+                        result.append(dg)
     return result
