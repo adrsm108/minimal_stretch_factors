@@ -1,3 +1,6 @@
+import datetime
+import json
+import pathlib
 import math
 from itertools import pairwise, product, islice
 from typing import Generator, Iterable
@@ -58,6 +61,20 @@ def simple_cycles_with_multiplicity(g: DiGraph) -> Generator[CycleWithMultiplici
         yield cycle, math.prod(edge_mults[e] for e in pairwise(cycle))
 
 
+def simple_cycles_and_curve_count(g: DiGraph):
+    get_edge_mult = edge_multiplicities(g).__getitem__
+    cycles = [*simple_cycles(g)]
+    return cycles, sum(
+        math.prod(map(get_edge_mult, pairwise(cycle))) for cycle in cycles
+    )
+
+
+def simple_cycles_and_curve_count_2(g: DiGraph):
+    cycles = [*simple_cycles_with_multiplicity(g)]
+
+    return cycles, sum(m for _, m in cycles)
+
+
 def simple_closed_curves(g: DiGraph):
     for cycle in simple_cycles(g):
         yield from product(
@@ -75,6 +92,7 @@ def curve_complex(data: DiGraph | Iterable[CycleWithMultiplicity], canonical=Tru
         if isinstance(data, DiGraph)
         else [*data]
     )
+
     cc = Graph(sum(m for _, m in cycles), multiedges=False, loops=False)
     i_offset = 0
     for i, (ci, mi) in enumerate(cycles):
@@ -97,7 +115,7 @@ def curve_complex(data: DiGraph | Iterable[CycleWithMultiplicity], canonical=Tru
 
 
 named_curve_complexes = {
-    name: Graph(spec).canonical_label(immutable=True)
+    name: Graph(spec, name=name).canonical_label(immutable=True)
     for name, spec in [
         ("A1", 1),
         ("2A1", 2),
@@ -106,10 +124,12 @@ named_curve_complexes = {
         ("5A1", 5),
         ("6A1", 6),
         ("7A1", 7),
-        ("8A1", 8),
         ("A2", [[0, 1], [(0, 1)]]),
         ("A2*", [[0, 1, 2], [(0, 1)]]),
-        ("A2**", [[0, 1, 2], [(0, 1)]]),
+        ("A2**", [[0, 1, 2, 3], [(0, 1)]]),
+        ("A2***", [[0, 1, 2, 3, 4], [(0, 1)]]),
+        ("A3*", [[0, 1, 2, 3], [(0, 1), (1, 2)]]),
+        ("Y*", [[0, 1, 2, 3, 4], [(0, 1), (0, 2), (0, 3)]]),
     ]
 }
 
@@ -165,7 +185,9 @@ def subdivide_edge(g: DiGraph, u, v):
     return w
 
 
-def bridge(g: DiGraph, a, b):
+def bridge(g: DiGraph, a, b, track=False):
+    if track:
+        history = (*getattr(g, "history", ()), (a, b))
     g = g.copy(immutable=False)
     match a:
         case (v, w):
@@ -178,8 +200,10 @@ def bridge(g: DiGraph, a, b):
             b = subdivide_edge(g, v, w)
 
     g.add_edge(a, b)
-
-    return g.canonical_label(algorithm="sage", immutable=True)
+    g = g.canonical_label(algorithm="sage", immutable=True)
+    if track:
+        g.history = history
+    return g
 
 
 def bridge_pairs(g: DiGraph):
@@ -209,7 +233,7 @@ def topological_digraphs_with_curve_complexes(
         ccs = (ccs,)
     indices = {g.canonical_label(immutable=True): i for i, g in enumerate(ccs)}
     targets = grouped_by(indices.keys(), len)
-    result = [set[DiGraph]() for _ in indices]
+    results = [set[DiGraph]() for _ in indices]
     max_curve_count = max(targets)
 
     descendants = {
@@ -220,8 +244,9 @@ def topological_digraphs_with_curve_complexes(
             loops=True,
         ).canonical_label(algorithm="sage", immutable=True),
     }
-
+    gen = 0
     while gs := descendants:
+        gen += 1
         descendants = set[DiGraph]()
         for g in gs:
             cycles = [*simple_cycles_with_multiplicity(g)]
@@ -230,12 +255,175 @@ def topological_digraphs_with_curve_complexes(
                 curve_count in targets
                 and (cc := curve_complex(cycles)) in targets[curve_count]
             ):
-                result[indices[cc]].add(g)
+                results[indices[cc]].add(g)
             if curve_count < max_curve_count:
-                for a, b in bridge_pairs(g):
-                    descendants.add(bridge(g, a, b))
+                if curve_count + 1 == max_curve_count:
+                    for a, b in bridge_pairs(g):
+                        desc = bridge(g, a, b)
+                        desc_cycles = [*simple_cycles_with_multiplicity(desc)]
+                        desc_curve_count = sum(m for _, m in desc_cycles)
+                        if (
+                            desc_curve_count in targets
+                            and (desc_cc := curve_complex(desc_cycles))
+                            in targets[desc_curve_count]
+                        ):
+                            results[indices[desc_cc]].add(desc)
+                else:
+                    descendants.update(bridge(g, a, b) for a, b in bridge_pairs(g))
+
+    return results
+
+
+def serialize_progress(obj):
+    if isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, DiGraph | Graph):
+        return list(obj.edges(labels=False))
+    else:
+        raise TypeError(f"Type {type(obj)} not serializable")
+
+
+def build_from_bridging(bridges):
+    result = [
+        DiGraph(
+            [[0], [(0, 0)]],
+            format="vertices_and_edges",
+            multiedges=True,
+            loops=True,
+        ).canonical_label(algorithm="sage", immutable=True)
+    ]
+
+    for a, b in bridges:
+        result.append(bridge(result[-1], a, b))
 
     return result
+
+
+def write_topological_digraphs_with_curve_complexes(
+    ccs_dict: dict[str, Graph],
+    out_dir: str = "../data/topological_graphs/",
+    save_progress=4,
+):
+    def log(*args):
+        print(f"{datetime.datetime.now().strftime('[%Y-%m-%d %H:%M:%S]:')}", *args)
+
+    start_time = datetime.datetime.now()
+    output_path = pathlib.Path(out_dir) / f"{start_time.strftime('%Y%m%d%H%M%S')}/"
+    output_path.mkdir()
+    progress_path = output_path / "progress/"
+    progress_path.mkdir()
+
+    names = {g.canonical_label(immutable=True): name for name, g in ccs_dict.items()}
+    targets = grouped_by(names.keys(), len)
+    results = {name: set[DiGraph]() for name in ccs_dict}
+
+    max_curve_count = max(targets)
+    gen = 0  # minimum curve count for graphs in gs
+
+    descendants = {
+        DiGraph(
+            [[0], [(0, 0)]],
+            format="vertices_and_edges",
+            multiedges=True,
+            loops=True,
+        ).canonical_label(algorithm="sage", immutable=True),
+    }
+
+    def log_progress(gen, i, n):
+        first_line = f"gen {gen}: {i} / {n} ({100 * i / n:.2f}%),"
+        if gen + 1 < max_curve_count:
+            log(first_line, f"{len(descendants)} descendants")
+        else:
+            log(
+                first_line,
+                f"{', '.join(f'{name}: {len(rs)}' for name, rs in results.items())}",
+            )
+
+    def write_results(cc_name, graphs):
+        out_fname = output_path / f"{cc_name.replace('*', '_star')}.json"
+        with out_fname.open("w+") as file:
+            json.dump(
+                {"curve_complex": cc_name, "count": len(graphs), "graphs": graphs},
+                file,
+                default=serialize_progress,
+                indent=2,
+            )
+        log(f"wrote {len(graphs)} graphs to {out_fname}")
+
+    def write_progress():
+        progress_fname = progress_path / f"gen{gen}.json"
+        with progress_fname.open("w+") as file:
+            json.dump(
+                {
+                    "gen": gen,
+                    "targets": list(ccs_dict.keys()),
+                    "results": results,
+                    "descendants": descendants,
+                },
+                file,
+                default=serialize_progress,
+                indent=2,
+            )
+            log(f"progress written to {progress_fname}")
+
+    log(f"writing results to {output_path}")
+    log(f"targets: {', '.join(ccs_dict.keys())}")
+    log(f"max_curve_count: {max_curve_count}")
+
+    while gs := descendants:
+        gen += 1
+        n = len(gs)
+        descendants = set[DiGraph]()
+
+        if gen >= save_progress:
+            write_progress()
+
+        for i, g in enumerate(gs):
+            cycles = [*simple_cycles_with_multiplicity(g)]
+            curve_count = sum(m for _, m in cycles)
+            if (
+                curve_count in targets
+                and (cc := curve_complex(cycles)) in targets[curve_count]
+            ):
+                results[names[cc]].add(g)
+            if curve_count < max_curve_count:
+                if curve_count + 1 == max_curve_count:
+                    for a, b in bridge_pairs(g):
+                        desc = bridge(g, a, b)
+                        desc_cycles = [*simple_cycles_with_multiplicity(desc)]
+                        desc_curve_count = sum(m for _, m in desc_cycles)
+                        if (
+                            desc_curve_count in targets
+                            and (desc_cc := curve_complex(desc_cycles))
+                            in targets[desc_curve_count]
+                        ):
+                            results[names[desc_cc]].add(desc)
+                else:
+                    descendants.update(bridge(g, a, b) for a, b in bridge_pairs(g))
+
+            if i > 0 and i % 20 == 0:
+                log_progress(gen, i, n)
+
+        for target in targets[gen]:
+            name = names[target]
+            write_results(name, results.pop(name))
+
+        log(f"finished gen {gen} ({n} graphs, {len(descendants)} descendants)")
+
+    while results:
+        write_results(*results.popitem())
+
+    delta = datetime.datetime.now() - start_time
+    log(
+        f"finished in {f'{delta.days}d ' if delta.days > 0 else ''}{
+            (datetime.datetime.min + delta).strftime('%Hh %Mm %Ss')
+        }"
+    )
+    return results
+
+
+def nao():
+    return datetime.datetime.now()
 
 
 def edge_automorphism_group(g: DiGraph):

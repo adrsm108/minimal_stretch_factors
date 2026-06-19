@@ -147,23 +147,38 @@ def valid_paths(
     signed=True,
     /,
     positive=None,
-    forward: dict[int, int] | bool | None = None,
+    fwd: dict[int, int] | bool | None = None,
 ):
     r"""
     Generate all nondegenerate paths over a collection of edges
 
-    A nondegenerate path is a sequence of edges with no subsequences of the form :math:`e, e^{-1}`.
     Edges are encoded as nonzero integers with sign indicating orientation:
-    `-n` is treated as `n` traversed in reverse.
-    A collection of edges which should initially be traversed positively.
-    For every edge `e` in ``preserve``, we only generate paths which the first occurence of `e` has positive sign.
+    ``-n`` is interpreted as the edge ``n`` traversed in reverse.
+    A nondegenerate path ``p`` is simply a sequence of edges wihere ``p[i] != -p[i+1]`` for all
+    ``i in range(len(p)-1)``
+    Additional arguments can be used to refine which paths are yielded.
 
     Input:
 
-    - ``edges`` -- collection of positive integers. Elements need not be distinct.
+    - ``edges`` -- collection of positive integers, not necessarily distinct
 
-    - ``positive`` -- collection of positive integers representing the edges that should
-      have a positive orientation the first time they appear in a generated path
+    - ``signed`` -- whether to yield oriented paths. If ``False``, the output will consist
+      of only positive paths
+
+    - ``positive`` -- collection of edges (integers) that should be positive the first
+      time they appear in each generated path. For example, ``valid_paths([1, 2], positive=[1])``
+      yields ``(1, 2)``, ``(1, -2)``, ``(2, 1)``, and ``(-2, 1)`` but skips
+      ``(-1, 2)``, ``(-1, -2)``, ``(2, -1)``, and ``(-2, -1)``.
+      Note that only the first appearance of a given edge is kept positive. For instance,
+      ``valid_paths([1, 1, 2], positive=[1])`` produces ``(1, 2, 1)`` as well as ``(1, 2, -1)``,
+      but never ``(-1, 2, 1)``.
+
+    - ``fwd`` -- bool or dict. If ``True``, permutations of unsigned edges in yielded paths
+      should be distinct up to reversal. For example, setting ``fwd=True`` with ``edges=[1, 2, 3]``
+      yields all variants of ``(1, 2, 3)`` up to sign while skipping variants of ``(3, 2, 1)``.
+      Among such pairs, we always yield the path ``p`` for which ``p[0] < p[-1]``, breaking ties
+      by examining ``p[1], p[-2]``, then ``p[2], p[-3]``, and so on.
+      If a dict is passed, we instead consider ``fwd[p[0]]`` and ``fwd[p[-1]]``.
 
     Output: a generator yielding paths over ``edges`` as tuples of length ``len(edges)``.
     """
@@ -173,29 +188,29 @@ def valid_paths(
     A.sort()
     n = len(A)
 
-    if not forward:
+    if not fwd:
 
-        def is_acceptable():
+        def is_fwd():
             return True
 
-    elif isinstance(forward, dict):
+    elif isinstance(fwd, dict):
 
-        def is_acceptable():
+        def is_fwd():
             return (
                 first_truthy(
-                    forward[A[i]] - forward[A[n - i - 1]] for i in range(n // 2)
+                    fwd[A[i]] - fwd[A[n - i - 1]] for i in range(n // 2)
                 )
                 <= 0
             )
 
     else:
 
-        def is_acceptable():
+        def is_fwd():
             return first_truthy(A[i] - A[n - i - 1] for i in range(n // 2)) <= 0
 
     while True:
         # A holds a permutation of the positive edges
-        if is_acceptable():  # permutation is not a reversal of one that came before it
+        if is_fwd():  # permutation is not a reversal of one that came before it
             # yield all valid combinations of signs
             # we change signs in-place and end up back where we started (all entries positive)
             if signed and (
@@ -234,18 +249,32 @@ def degrees(partition: DisjointSet | Iterable[Sequence[int]]):
     return Counter(len(subset) for subset in partition)
 
 
-def degree_counter(data: DisjointSet | DegreeDict | DegreeSeq) -> Counter[int]:
-    match data:
-        case Counter():
-            return data
-        case dict():
-            return Counter(data)
-        case [(int(_), int(_)), *_]:
-            return Counter(dict[int, int](data))
-        case [*_]:
-            return Counter(data)
+def degree_counter(degs: Degrees) -> Counter[int]:
+    """
+    Return a ``Counter`` representing the given degree sequence.
 
-    raise ValueError(f"Input {data} was not recognized as a degree sequence")
+    Inputs:
+
+    - ``degs`` -- a degree sequence, in one of the following formats:
+
+      - a sequence of integers, each entry being the degree of a vertex.
+      - a run-length encoded sequence of integer pairs ``(degree, multiplicity)``
+      - a ``dict`` with key-value pairs of the above type
+      - a ``Counter`` object with integer keys
+
+    Outputs: A ``Counter`` with integer keys for degree, values for multiplicity
+    """
+    match degs:
+        case Counter():
+            return degs
+        case dict():
+            return Counter(degs)
+        case [(int(_), int(_)), *_]:
+            return Counter(dict[int, int](degs))
+        case [_, *_]:
+            return Counter(degs)
+
+    raise ValueError(f"Input {degs} was not recognized as a degree sequence")
 
 
 def degree_tuple_rle(degs: Degrees) -> DegreeSeq:
@@ -258,19 +287,6 @@ def degree_tuple_rle(degs: Degrees) -> DegreeSeq:
     )
 
 
-# def degree_sequence(degs: )
-
-
-# def max_trivalent(degs: dict[int, int]):
-#     r"""
-#     Return the maximum number of valence-3 verts among all graphs that can be
-#     obtained from a graph with the given degree sequence by identifying vertices.
-#     """
-#     ones = degs.get(1, 0)
-#     m = min(degs.get(2, 0), ones)
-#     return degs.get(3, 0) + m + (ones - m) // 3
-
-
 @cache
 def _is_admissible_degree_sequence(degs: DegreeSeq, rank: int) -> bool:
     r"""
@@ -278,7 +294,7 @@ def _is_admissible_degree_sequence(degs: DegreeSeq, rank: int) -> bool:
 
     We say a degree sequence is admissible in rank `r` if it can be
     realized by a graph `G` whose edge germ partition is admissible in rank `r`.
-    Equivalently, if the vertices of `G` can be identified to produce
+    Equivalently, if some vertices of `G` can be identified to produce
     a connected graph of rank `r` with no valence :math:`\le 2` vertices.
 
     Inputs:
@@ -288,17 +304,17 @@ def _is_admissible_degree_sequence(degs: DegreeSeq, rank: int) -> bool:
 
     - ``rank`` -- positive integer
 
-    Outputs: ``True`` if ``degs`` is admissible in the given rank
+    Outputs: bool, ``True`` if ``degs`` is admissible in the given rank
     """
     n_verts, n_edges = vertex_and_edge_count_in_rank(degs, rank)
     degs = Counter(dict(degs))
     # min number of deg-3 verts req'd for this graph to have no valence <= 2 verts
     return (
         first(
-            _tt_deg_seq_quotients(
+            _tt_deg_quotients(
                 degs,
                 n_verts,
-                min_trivalent_vertices(n_verts, n_edges),
+                min_trivalent_verts(n_verts, n_edges),
                 report_unions=False,
             ),
             None,
@@ -323,7 +339,7 @@ def is_admissible_partition(germs: DisjointSet, rank: int) -> bool:
 
     - ``rank`` -- positive integer, the rank of `G`
 
-    Outputs: ``True`` if ``germs`` is admissible in the given rank.
+    Outputs: bool, ``True`` if ``germs`` is admissible in the given rank
     """
     return _is_admissible_degree_sequence(degree_tuple_rle(degrees(germs)), rank)
 
@@ -339,18 +355,25 @@ def candiate_train_track_maps(
     tg: DiGraph, rank: int, canonical=True
 ) -> list[tuple[PartialGraphMap, DisjointSet]]:
     """
-    Get all candidates for train-track maps with a given transition digraph and domain rank
+    List all train-track maps on a rank-``rank`` graph with the given transition digraph
 
     Inputs:
 
     - ``tg`` -- digraph with positive integer vertices. Should be strongly connected.
-    - ``rank`` -- positive integer
+    - ``rank`` -- positive integer, the rank of the domain for each map
+    - ``canonical`` -- bool. If ``True`` (default), then generate only the maps which
+      respect some canonical orientation on the stacks of ``tg``, which are distinct
+      up to a relabeling of edges in their domain. If ``False``, return a separate
+      map for each orientation on the stacks of ``tg``.
+      Warning: Disabling this flag significantly affects computation time, by
+      a factor on the order of 2^(# stacks in ``tg``).
 
     Outputs: a list of pairs ``(f, pf)``
 
     - ``f`` -- ``PartialGraphMap`` with transition digraph ``tg``. Returned maps are
       guaranteed to be train-track and complete (no edge images left unspecified).
-    - ``pf`` -- disjoint set of integers representing the partition induced by ``f`` on edge germs of its domain.
+    - ``pf`` -- ``DisjointSet_of_hashables`` representing the partition induced by
+      ``f`` on edge germs of its domain.
 
     Returns ``[]`` if no such maps exist.
     """
@@ -391,7 +414,7 @@ def candiate_train_track_maps(
         for fe in valid_paths(
             image_edges,
             positive=positive.get(e, None),
-            forward=forward.get(e, None),
+            fwd=forward.get(e, None),
         ):
             new_f = f.new_edge_mapping(e, fe)
             try:
@@ -433,13 +456,14 @@ def edge_count(degs: Degrees):
 
 def vertex_and_edge_count_in_rank(degs: Degrees, rank: int):
     """
-    Determine the number of vertices and edges in a rank-``rank`` quotient of a graph with degree sequence ``degs``.
+    Determine the number of vertices and edges in a rank-``rank`` quotient of
+    a graph with degree sequence ``degs``.
     """
     n_edges = edge_count(degs)
     return n_edges - rank + 1, n_edges
 
 
-def min_trivalent_vertices(n_verts: int, n_edges: int):
+def min_trivalent_verts(n_verts: int, n_edges: int):
     r"""
     Return the min number of degree-3 vertices for a connected graph on
     ``n_verts`` vertices and ``n_edges`` edges with no valence <= 2 vertices
@@ -448,7 +472,7 @@ def min_trivalent_vertices(n_verts: int, n_edges: int):
     return nneg(4 * n_verts - 2 * n_edges)
 
 
-def max_trivalent(degs: Counter[int], n_unions: int):
+def max_trivalent_verts(degs: Counter[int], n_unions: int):
     """
     Compute the maximum number of trivalent vertices possible after `n` identifications
 
@@ -505,7 +529,7 @@ def min_unions(degs: Counter[int]):
     )
 
 
-def _tt_deg_seq_quotients(
+def _tt_deg_quotients(
     degs: Degrees,
     n_verts: int,
     min_trivalent: int,
@@ -539,7 +563,10 @@ def _tt_deg_seq_quotients(
                 )
             else:
                 return
-        if min_trivalent > 0 and (max_3s := max_trivalent(counts, n)) < min_trivalent:
+        if (
+            min_trivalent > 0
+            and (max_3s := max_trivalent_verts(counts, n)) < min_trivalent
+        ):
             if verbose:
                 print(f"invalid (threes; {max_3s} < {min_trivalent})")
             if full_search:
@@ -584,18 +611,13 @@ def _tt_deg_seq_quotients(
     return go(degs, n_unions, None)
 
 
-def _deg_partitions_from_merging(degs: DegreeDict, merges: Merges):
+def _deg_parts_by_merging(degs: DegreeDict, merges: Merges):
     """"""
-    # print(degs, merges)
     merges = reversed((*unnest(merges),))
-    # return list(merges)
     states = [{d: Counter({(d,): m}) for d, m in degs.items()}]
     for di, dj in merges:
         new_states = []
-        # print(di, dj)
-        # print(states)
         for state in states:
-            # print(state)
             for i, subset_i in enumerate(state[di]):
                 state[di][subset_i] -= 1
                 for j, subset_j in enumerate(state[dj]):
@@ -622,64 +644,7 @@ def _deg_partitions_from_merging(degs: DegreeDict, merges: Merges):
     }
 
 
-def train_track_degree_partitions(
-    degs: Degrees, rank: int
-) -> dict[DegreeSeq, set[DegreePartition]]:
-    degs = degree_counter(degs)
-    n_verts, n_edges = vertex_and_edge_count_in_rank(degs, rank)
-
-    found = {}
-    for deg_seq, merges in _tt_deg_seq_quotients(
-        degs,
-        n_verts,
-        min_trivalent_vertices(n_verts, n_edges),
-        report_unions=True,
-    ):
-        if deg_seq in found:
-            found[deg_seq].update(_deg_partitions_from_merging(degs, merges))
-        else:
-            found[deg_seq] = _deg_partitions_from_merging(degs, merges)
-
-    return found
-
-
-def train_track_partitions(
-    germs: DisjointSet,
-    rank: int,
-):
-    # degs = Counter(dict(sorted(degs.items())))
-    subsets = sorted(germs, key=shortlex)
-    degs = degrees(subsets)
-    degree_partitions = train_track_degree_partitions(degs, rank)
-    # result = dict.fromkeys(degree_partitions)
-    result: dict[DegreeSeq, list[DegreePartition]] = {
-        deg_seq: [] for deg_seq in degree_partitions
-    }
-    for deg_seq, deg_parts in degree_partitions.items():
-        for deg_part in deg_parts:
-            part_idxs, overgroup, subgroup = degree_partition_structure(degs, deg_part)
-            # print("degree_seq:", deg_seq)
-            # print("partition:    ", deg_part)
-            # print("partition idx:", part_idxs)
-            # print(subgroup)
-            for rep, _ in overgroup.gap().DoubleCosetRepsAndSizes(subgroup, subgroup):
-                perm = rep.sage(overgroup)
-                # edge germ partition
-                partition = deep_tuple(
-                    sorted(
-                        (
-                            sorted(el for i in subset for el in subsets[perm(i) - 1])
-                            for subset in part_idxs
-                        ),
-                        key=shortlex,
-                    )
-                )
-                if is_connected_domain(partition):
-                    result[deg_seq].append(partition)
-    return result
-
-
-def degree_partition_structure(degs: Counter[int], deg_part: DegreePartition):
+def _deg_part_structure(degs: Counter[int], deg_part: DegreePartition):
     # indices = {d: (i := i + n) - n for d, n in sorted(degs.items())}
     dom = [*range(1, degs.total() + 1)]
     overgp_gens = []
@@ -719,6 +684,54 @@ def degree_partition_structure(degs: Counter[int], deg_part: DegreePartition):
         overgroup,
         overgroup.subgroup(subgp_gens, domain=dom),
     )
+
+
+def _tt_deg_parts(degs: Degrees, rank: int) -> dict[DegreeSeq, set[DegreePartition]]:
+    degs = degree_counter(degs)
+    n_verts, n_edges = vertex_and_edge_count_in_rank(degs, rank)
+
+    found = {}
+    for deg_seq, merges in _tt_deg_quotients(
+        degs,
+        n_verts,
+        min_trivalent_verts(n_verts, n_edges),
+        report_unions=True,
+    ):
+        if deg_seq in found:
+            found[deg_seq].update(_deg_parts_by_merging(degs, merges))
+        else:
+            found[deg_seq] = _deg_parts_by_merging(degs, merges)
+
+    return found
+
+
+def train_track_partitions(
+    germs: DisjointSet,
+    rank: int,
+):
+    subsets = sorted(germs, key=shortlex)
+    degs = degrees(subsets)
+    degree_partitions = _tt_deg_parts(degs, rank)
+    result: dict[DegreeSeq, list[DegreePartition]] = {
+        deg_seq: [] for deg_seq in degree_partitions
+    }
+    for deg_seq, deg_parts in degree_partitions.items():
+        for deg_part in deg_parts:
+            part_idxs, overgroup, subgroup = _deg_part_structure(degs, deg_part)
+            for rep, _ in overgroup.gap().DoubleCosetRepsAndSizes(subgroup, subgroup):
+                perm = rep.sage(overgroup)
+                partition = deep_tuple(
+                    sorted(
+                        (
+                            sorted(el for i in subset for el in subsets[perm(i) - 1])
+                            for subset in part_idxs
+                        ),
+                        key=shortlex,
+                    )
+                )
+                if is_connected_domain(partition):
+                    result[deg_seq].append(partition)
+    return result
 
 
 def root_to_elements_dict(
