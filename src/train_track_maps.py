@@ -197,10 +197,7 @@ def valid_paths(
 
         def is_fwd():
             return (
-                first_truthy(
-                    fwd[A[i]] - fwd[A[n - i - 1]] for i in range(n // 2)
-                )
-                <= 0
+                first_truthy(fwd[A[i]] - fwd[A[n - i - 1]] for i in range(n // 2)) <= 0
             )
 
     else:
@@ -351,7 +348,7 @@ def depth_first_neighbors(g: DiGraph, start):
     return neighbors
 
 
-def candiate_train_track_maps(
+def candidate_train_track_maps(
     tg: DiGraph, rank: int, canonical=True
 ) -> list[tuple[PartialGraphMap, DisjointSet]]:
     """
@@ -441,7 +438,7 @@ def filter_candidate_transition_graphs(candidates, rank, canonical=True):
     return list(
         with_attributes(candidate, candidate_maps=candidate_maps, candidate_index=i)
         for i, candidate in enumerate(candidates)
-        if (candidate_maps := [*candiate_train_track_maps(candidate, rank, canonical)])
+        if (candidate_maps := [*candidate_train_track_maps(candidate, rank, canonical)])
     )
 
 
@@ -729,8 +726,8 @@ def train_track_partitions(
                         key=shortlex,
                     )
                 )
-                if is_connected_domain(partition):
-                    result[deg_seq].append(partition)
+                # if is_connected_domain(echo(partition)):
+                result[deg_seq].append(partition)
     return result
 
 
@@ -774,6 +771,7 @@ def is_connected_domain(partition: DisjointSet | Iterable[Sequence[int]]):
 
 
 def domain_graph(vp: DisjointSet | Iterable[Sequence[int]], canonical=True):
+
     d = element_to_root_dict(vp)
     dom = DiGraph(
         [(d[i], d[-i], i) for i in d.keys() if i > 0],
@@ -804,7 +802,7 @@ def train_track_maps(tg: DiGraph, rank: int):
     if not tg.is_strongly_connected():
         raise ValueError("Transition digraph must be strongly connected.")
 
-    candidate_maps = candiate_train_track_maps(tg, rank)
+    candidate_maps = candidate_train_track_maps(tg, rank)
 
     for f, germs in candidate_maps:
         doms = [*train_track_domains(f, rank, germs)]

@@ -9,6 +9,7 @@ from typing import (
 from types import GeneratorType
 from collections import deque
 
+from sage.graphs.generic_graph import GenericGraph
 from sage.graphs.digraph import DiGraph
 
 type NestedTuple[T] = None | tuple[T, NestedTuple[T]]
@@ -207,3 +208,41 @@ def deep_tuple(coll: Iterable) -> tuple[Any, ...]:
             for x in coll
         ),
     )
+
+
+def show_graphs(iterable: Iterable[GenericGraph], **kwargs):
+    for g in iterable:
+        g.show(**kwargs)
+
+
+def echo_graphs(data: GenericGraph | Iterable[GenericGraph], **kwargs):
+    if isinstance(data, GenericGraph):
+        data.show(**kwargs)
+    else:
+        for g in data:
+            g.show(**kwargs)
+    return data
+
+
+# slightly faster than the version in sage.graphs.tutte_polynomial
+# (uses edge iterator instead of EdgeView, and avoids dict.setdefault)
+def edge_multiplicities(g: GenericGraph):
+    es: dict[tuple[int, int], int] = {}
+    for e in g.edge_iterator(labels=False):
+        if e in es:
+            es[e] += 1
+        else:
+            es[e] = 1
+    return es
+
+
+def are_distinct_graphs(gs):
+    return all(not g.is_isomorphic(h) for g in gs for h in gs if g != h)
+
+
+def MultiDiGraph(*args, **kwargs) -> DiGraph:
+    return DiGraph(*args, **(kwargs | {"loops": True, "multiedges": True}))
+
+
+def mdg_str(g: DiGraph):
+    return f"MultiDiGraph({g.edges(labels=False)!r})"
